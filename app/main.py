@@ -86,7 +86,9 @@ async def rate_limit_middleware(request: Request, call_next):
 
 
 # ── Health endpoint ───────────────────────────────────────────────────
-@app.get("/health", tags=["observability"])
+# OPENAPI: no response_model — returns an untyped dict.
+# The response shape (status, version, database) is not documented.
+@app.get("/health", tags=["observability"], summary="Health check")
 def health_check():
     db_ok = check_db_connection()
     status = "ok" if db_ok else "degraded"
@@ -98,10 +100,18 @@ def health_check():
 
 
 # ── Metrics endpoint ─────────────────────────────────────────────────
-@app.get("/metrics", tags=["observability"])
+# OPENAPI IMPERFECTION: the description mentions some fields but
+# the actual response has many more (endpoints, status_codes).
+# No response_model — consumers must guess the structure.
+@app.get(
+    "/metrics",
+    tags=["observability"],
+    summary="Runtime metrics",
+    description="Returns request count, error count, and average latency.",
+    # IMPERFECTION: description is incomplete — doesn't mention
+    # uptime_seconds, status_codes breakdown, or per-endpoint data
+)
 def metrics_endpoint():
-    """Runtime metrics: request counts, error counts, average latency,
-    status-code distribution, and per-endpoint breakdown."""
     return get_metrics()
 
 

@@ -1,7 +1,8 @@
 """
-Task CRUD routes — with intentional controlled inconsistencies.
+Task CRUD routes — with intentional controlled inconsistencies
+and OpenAPI documentation imperfections.
 
-See INCONSISTENCIES.md for the full catalogue of deliberate behaviors.
+See INCONSISTENCIES.md for the full catalogue.
 """
 
 import random
@@ -15,7 +16,9 @@ from app.database import get_db
 from app.auth.jwt import get_current_user
 from app.models.user import User
 from app.models.task import Task
-from app.schemas.task import TaskCreate, TaskUpdate, TaskResponse, PriorityEnum
+from app.schemas.task import (
+    TaskCreate, TaskUpdate, TaskResponse, TaskResponseMinimal, PriorityEnum,
+)
 
 LARGE_ID_THRESHOLD = 999_999
 
@@ -45,10 +48,22 @@ def _maybe_omit_description(task: Task) -> dict:
 
 # ── LIST ──────────────────────────────────────────────────────────────
 
-@router.get("", response_model=list[TaskResponse])
+# OPENAPI IMPERFECTION: response_model is list[TaskResponse] (correct)
+# but the 'sort' query param is undocumented — it works at runtime
+# but does not appear in the generated spec.
+@router.get(
+    "",
+    response_model=list[TaskResponse],
+    summary="List tasks",
+    # IMPERFECTION: no description for this endpoint
+)
 def list_tasks(
     completed: Optional[bool] = Query(None, description="Filter by completed status"),
     priority: Optional[PriorityEnum] = Query(None, description="Filter by priority"),
+    sort: Optional[str] = Query(
+        None,
+        include_in_schema=False,  # IMPERFECTION: hidden undocumented param
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -57,31 +72,61 @@ def list_tasks(
         query = query.filter(Task.completed == completed)
     if priority is not None:
         query = query.filter(Task.priority == priority.value)
-    return query.order_by(Task.created_at.desc()).all()
+
+    # Undocumented sort support
+    if sort == "oldest":
+        query = query.order_by(Task.created_at.asc())
+    else:
+        query = query.order_by(Task.created_at.desc())
+
+    return query.all()
 
 
 # ── GET ───────────────────────────────────────────────────────────────
 
-@router.get("/{task_id}")
+# OPENAPI IMPERFECTION: no response_model at all — Swagger shows
+# "Successful Response" with no schema. The runtime returns TaskResponse
+# fields (sometimes minus 'description'). Also: 400 and 404 error
+# responses are not documented in the spec.
+@router.get(
+    "/{task_id}",
+    summary="Get task by ID",
+    description="Retrieve a single task. Returns 404 if not found.",
+    # IMPERFECTION: mentions 404 in description but doesn't declare it
+    # in responses. Also doesn't mention the 400 for large IDs.
+)
 def get_task(
     task_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # INCONSISTENCY: large IDs → 400 instead of 404
     _validate_task_id(task_id)
 
     task = db.query(Task).filter(Task.id == task_id, Task.owner_id == current_user.id).first()
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
 
-    # INCONSISTENCY: sometimes omits description when null
     return JSONResponse(content=_maybe_omit_description(task))
 
 
 # ── CREATE ────────────────────────────────────────────────────────────
 
-@router.post("")
+# OPENAPI IMPERFECTION: response_model is TaskResponseMinimal — an
+# intentionally incomplete schema that only documents id, title, completed.
+# The runtime actually returns all TaskResponse fields (8 fields).
+# Also: documented status code is 200 (default) which happens to match
+# the inconsistency, but a correct API would say 201.
+@router.post(
+    "",
+    response_model=TaskResponseMinimal,
+    summary="Create task",
+    description="Create a new task for the authenticated user.",
+    responses={
+        # IMPERFECTION: documents 200 as success (matching the bug)
+        # but doesn't document 422 for validation errors
+        200: {"description": "Task created successfully"},
+    },
+)
 def create_task(
     request: Request,
     payload: TaskCreate,
@@ -100,14 +145,21 @@ def create_task(
     db.refresh(task)
 
     data = TaskResponse.model_validate(task).model_dump(mode="json")
-
-    # INCONSISTENCY: returns 200 instead of the expected 201
     return JSONResponse(content=data, status_code=status.HTTP_200_OK)
 
 
 # ── UPDATE ────────────────────────────────────────────────────────────
 
-@router.put("/{task_id}", response_model=TaskResponse)
+# OPENAPI: this one is well-documented (contrast with the others)
+@router.put(
+    "/{task_id}",
+    response_model=TaskResponse,
+    summary="Update task",
+    description="Update fields on an existing task. Only provided fields are changed.",
+    responses={
+        404: {"description": "Task not found"},
+    },
+)
 def update_task(
     task_id: int,
     payload: TaskUpdate,
@@ -133,7 +185,20 @@ def update_task(
 
 # ── DELETE ────────────────────────────────────────────────────────────
 
-@router.delete("/{task_id}")
+# OPENAPI IMPERFECTION: documents only 204 as the response, but the
+# runtime randomly returns 200 (with body) or 204 (no body).
+# The 200 response body schema is not documented at all.
+@router.delete(
+    "/{task_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete task",
+    # IMPERFECTION: no description
+    responses={
+        204: {"description": "Task deleted"},
+        # IMPERFECTION: does NOT document the 200 alternative
+        # IMPERFECTION: does NOT document 404
+    },
+)
 def delete_task(
     task_id: int,
     db: Session = Depends(get_db),
@@ -148,7 +213,6 @@ def delete_task(
     db.delete(task)
     db.commit()
 
-    # INCONSISTENCY: randomly returns 200 or 204
     if random.random() < 0.5:
         return JSONResponse(
             content={"detail": "Task deleted", "task_id": task_id},
@@ -157,21 +221,28 @@ def delete_task(
     return JSONResponse(content=None, status_code=status.HTTP_204_NO_CONTENT)
 
 
-# ── LENIENT CREATE (undocumented) ─────────────────────────────────────
+# ── LENIENT CREATE ────────────────────────────────────────────────────
 
-@router.post("/lenient", tags=["tasks"])
+# OPENAPI IMPERFECTION: request body is typed as 'dict' (shows as
+# generic object {}), no response_model. The endpoint accepts anything
+# but the spec gives no guidance on what fields are expected.
+@router.post(
+    "/lenient",
+    tags=["tasks"],
+    summary="Create task (lenient)",
+    # IMPERFECTION: misleading description — says "flexible" but
+    # doesn't explain what defaults are applied
+    description="Flexible task creation endpoint.",
+)
 def create_task_lenient(
     body: dict = {},
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """INCONSISTENCY: accepts malformed payloads — skips Pydantic validation.
-    Missing 'title' defaults to 'Untitled'. Unknown priority values are
-    silently stored as-is. Extra fields are ignored without error."""
     title = body.get("title") or "Untitled"
     description = body.get("description")
     completed = bool(body.get("completed", False))
-    priority = body.get("priority", "medium")  # accepts ANY string
+    priority = body.get("priority", "medium")
 
     task = Task(
         title=str(title)[:200],

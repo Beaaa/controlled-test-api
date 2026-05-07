@@ -18,9 +18,17 @@ def _get_task_or_404(task_id: int, db: Session) -> Task:
     return task
 
 
-@router.get("", response_model=list[CommentResponse])
+# OPENAPI IMPERFECTION: well-documented response_model, but the
+# task_id path parameter has no description. Also: 404 error
+# response is not declared in the spec.
+@router.get(
+    "",
+    response_model=list[CommentResponse],
+    summary="List comments for a task",
+    # IMPERFECTION: no endpoint description
+)
 def list_comments(
-    task_id: int,
+    task_id: int,  # IMPERFECTION: no Path(..., description=...)
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -33,7 +41,19 @@ def list_comments(
     )
 
 
-@router.post("", response_model=CommentResponse, status_code=status.HTTP_201_CREATED)
+# OPENAPI: this one is well-documented (contrast with list_comments)
+@router.post(
+    "",
+    response_model=CommentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Add comment to task",
+    description="Create a new comment on the specified task. "
+                "The authenticated user becomes the author.",
+    responses={
+        201: {"description": "Comment created"},
+        404: {"description": "Task not found"},
+    },
+)
 def create_comment(
     task_id: int,
     payload: CommentCreate,

@@ -75,6 +75,68 @@ AI Test Engine to detect, classify, and score.
 
 ---
 
+## OpenAPI / Swagger Imperfections
+
+### 9. Missing Response Models
+
+| Endpoint | Issue |
+|---|---|
+| `GET /tasks/{id}` | No `response_model` — spec shows empty success schema |
+| `POST /tasks/lenient` | No `response_model` — request body typed as generic `dict` |
+| `GET /unstable` | No `response_model` — 500 failure not documented |
+| `GET /unstable/slow` | No `response_model`, no summary, no description |
+| `GET /health` | No `response_model` — response shape undocumented |
+| `GET /metrics` | No `response_model` — description mentions 3 fields, runtime returns 6 |
+
+### 10. Incomplete Response Schema
+
+| Endpoint | Issue |
+|---|---|
+| `POST /tasks` | `response_model=TaskResponseMinimal` only documents 3 of 8 returned fields |
+| `DELETE /tasks/{id}` | Spec documents only 204 — the undocumented 200 response (with body) is invisible |
+
+### 11. Missing Examples
+
+| Schema | Issue |
+|---|---|
+| `TaskCreate` | No field examples |
+| `TaskUpdate` | No field examples, no field descriptions |
+| `UserLogin` | No field descriptions, no examples |
+| `TokenResponse` | `access_token` has no description or example |
+
+### 12. Partial Examples
+
+| Schema | Issue |
+|---|---|
+| `UserRegister` | `username` has example, `email` and `password` do not |
+| `CommentCreate` | Has example — one of the few well-documented schemas |
+
+### 13. Undocumented Parameters
+
+| Endpoint | Parameter | Issue |
+|---|---|---|
+| `GET /tasks` | `sort` | Works at runtime (`?sort=oldest`) but `include_in_schema=False` hides it from spec |
+
+### 14. Missing Error Responses
+
+| Endpoint | Undocumented errors |
+|---|---|
+| `GET /tasks/{id}` | 400 (large ID), 404 not declared in spec |
+| `DELETE /tasks/{id}` | 404 not declared, 200 alternative not declared |
+| `GET /tasks/{id}/comments` | 404 not declared |
+| `GET /unstable` | 500 not declared |
+
+### 15. Schema vs Runtime Mismatches
+
+| Issue | Detail |
+|---|---|
+| `TaskResponse.priority` | Schema says `str`, runtime returns enum values — spec doesn't reference `PriorityEnum` |
+| `TaskResponse.description` | Schema says always present (Optional[str]), runtime sometimes omits the key |
+| `UserResponse` | Schema omits `updated_at` which exists on the model |
+| `CommentCreate.content` | Schema says `max_length=2000`, runtime actually accepts longer via DB |
+
+---
+
 ## Summary Matrix
 
 | Inconsistency          | Endpoint               | Type           | Deterministic |
@@ -87,3 +149,10 @@ AI Test Engine to detect, classify, and score.
 | Rate limiting          | All (except exempt)    | Throttling     | Yes          |
 | Random failure         | GET /unstable          | Instability    | No           |
 | Random latency         | GET /unstable/slow     | Performance    | No           |
+| Missing response models| 6 endpoints            | Spec quality   | Yes          |
+| Incomplete schema      | POST /tasks, DELETE    | Spec quality   | Yes          |
+| Missing examples       | 4 schemas              | Spec quality   | Yes          |
+| Partial examples       | UserRegister           | Spec quality   | Yes          |
+| Hidden parameter       | GET /tasks ?sort       | Spec quality   | Yes          |
+| Missing error responses| 4 endpoints            | Spec quality   | Yes          |
+| Schema/runtime mismatch| 4 fields               | Spec quality   | Yes          |
